@@ -1153,14 +1153,12 @@ function filterGames(gamesToFilter, filters) {
   } = filters;
 
   return gamesToFilter.filter(game => {
-    // My filters: "owned" is its own condition (AND with everything else).
-    if (onlyOwned && !game.owned) {
-      return false;
-    }
-
-    // The two BGA filters: if either/both are on, the game must match at least one selected.
-    if (onlyBgaPlayed || onlyBgaLearn) {
-      const ok = (onlyBgaPlayed && game.bga_played) || (onlyBgaLearn && game.bga_learn);
+    // My three filters combine with OR:
+    // if any of them is on, the game must match at least one of the selected ones.
+    if (onlyOwned || onlyBgaPlayed || onlyBgaLearn) {
+      const ok = (onlyOwned && game.owned) ||
+        (onlyBgaPlayed && game.bga_played) ||
+        (onlyBgaLearn && game.bga_learn);
       if (!ok) {
         return false;
       }
