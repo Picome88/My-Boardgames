@@ -44,16 +44,23 @@ def parse_config_file(config_path="config.txt"):
 def create_nested_config(config):
     """Convert flat config to nested structure for backward compatibility"""
     nested = {
-        "project": {
-            "title": config["title"]
-        },
-        "boardgamegeek": {
-            "user_name": config["bgg_username"]
-        },
-        "github": {
-            "repo": config["github_repo"]
-        }
+    "project": {
+        "title": config["title"]
+    },
+    "boardgamegeek": {
+        "user_name": config["bgg_username"]
+    },
+    "github": {
+        "repo": config["github_repo"]
     }
+}
+
+# Read extra BGG collection parameters from config.ini
+if "extra_params" in config:
+    try:
+        nested["boardgamegeek"]["extra_params"] = eval(config["extra_params"])
+    except Exception:
+        raise ValueError("Invalid extra_params format in config.ini")
     
     # Check for BGG token in environment variable first
     bgg_token = os.environ.get('GAMECACHE_BGG_TOKEN')
