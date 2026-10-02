@@ -1,5 +1,11 @@
 {
-  "owned": [358669],
+  "owned": [173346, 358669],
   "played": [208766],
-  "want_to_learn": [203828]
+  "want_to_learn": [203828],
+  "_names": {
+    "173346": "7 Wonders Duel",
+    "203828": "13 Minutes: The Cuban Missile Crisis, 1962",
+    "208766": "13 Clues",
+    "358669": "12 Chip Trick"
+  }
 }
