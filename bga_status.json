@@ -1,9 +1,10 @@
 {
-  "owned": [173346, 358669, 393325],
-  "played": [208766],
-  "want_to_learn": [203828],
+  "owned": [173346, 177736, 358669, 393325],
+  "played": [177736, 208766],
+  "want_to_learn": [177736, 203828],
   "_names": {
     "173346": "7 Wonders Duel",
+    "177736": "A Feast for Odin",
     "203828": "13 Minutes: The Cuban Missile Crisis, 1962",
     "208766": "13 Clues",
     "358669": "12 Chip Trick",
