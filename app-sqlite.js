@@ -42,6 +42,22 @@ function normalizeKey(x) {
   return String(x).trim().toLowerCase();
 }
 
+function getStoredToken() {
+  try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+}
+
+// Edit mode needs your GitHub token. Without it, visitors are sent back to the normal site.
+function requireTokenForEditMode() {
+  if (getStoredToken()) return true;
+  const token = (prompt('Edit mode is only for the site owner.\nPaste your GitHub token to continue:') || '').trim();
+  if (!token) {
+    window.location.href = window.location.pathname;
+    return false;
+  }
+  try { localStorage.setItem(TOKEN_KEY, token); } catch (e) {}
+  return true;
+}
+
 function parseListsData(data) {
   return {
     owned: (data.owned || []).map(normalizeKey),
@@ -52,6 +68,10 @@ function parseListsData(data) {
 
 async function loadMyLists(settings) {
   GITHUB_REPO = (settings && settings.github && settings.github.repo) || '';
+
+  if (EDIT_MODE && !requireTokenForEditMode()) {
+    return;
+  }
 
   // In edit mode, read the newest file straight from GitHub (the website copy can be a few minutes old)
   if (EDIT_MODE && GITHUB_REPO) {
@@ -200,6 +220,126 @@ async function saveListsToGitHub(setStatus) {
   }
 }
 
+function sameLists(a, b) {
+  const norm = l => JSON.stringify((l || []).map(normalizeKey).sort());
+  return norm(a.owned) === norm(b.owned) &&
+    norm(a.played) === norm(b.played) &&
+    norm(a.want_to_learn) === norm(b.want_to_learn);
+}
+
+// Wait until the public website serves the lists we just saved on GitHub
+async function waitForSiteUpdate(expected, onTick, timeoutMs = 300000, intervalMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch('./bga_status.json?v=' + Date.now() + Math.random(), { cache: 'no-store' });
+      if (response.ok && sameLists(parseListsData(await response.json()), expected)) {
+        return true;
+      }
+    } catch (e) {
+      // keep waiting
+    }
+    onTick(Math.round((Date.now() - started) / 1000));
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+function leaveEditMode() {
+  editDirty = false;
+  window.location.href = window.location.pathname;
+}
+
+function showBusyOverlay() {
+  let overlay = document.getElementById('busy-overlay');
+  if (overlay) return overlay;
+  overlay = document.createElement('div');
+  overlay.id = 'busy-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;color:#222;padding:24px 28px;border-radius:12px;max-width:420px;text-align:center;font-size:16px;line-height:1.6;';
+  const text = document.createElement('div');
+  text.id = 'busy-text';
+  const actions = document.createElement('div');
+  actions.id = 'busy-actions';
+  actions.style.cssText = 'margin-top:14px;';
+  box.appendChild(text);
+  box.appendChild(actions);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function setBusyText(t) {
+  const el = document.getElementById('busy-text');
+  if (el) el.textContent = t;
+}
+
+function addBusyButton(label, onClick) {
+  const actions = document.getElementById('busy-actions');
+  if (!actions) return;
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.style.cssText = 'margin:4px;padding:8px 14px;cursor:pointer;';
+  b.addEventListener('click', onClick);
+  actions.appendChild(b);
+}
+
+async function saveAndExitEditMode() {
+  // Nothing changed: just leave
+  if (!editDirty) {
+    leaveEditMode();
+    return;
+  }
+
+  const overlay = showBusyOverlay();
+  const actions = document.getElementById('busy-actions');
+  actions.innerHTML = '';
+  setBusyText('Saving your lists to GitHub...');
+
+  const savedLists = JSON.parse(JSON.stringify(myLists));
+  const ok = await saveListsToGitHub(setBusyText);
+  if (!ok) {
+    // keep the message from the failed save, and let the user go back to editing
+    addBusyButton('Back to editing', () => overlay.remove());
+    return;
+  }
+
+  setBusyText('Saved! Waiting for the website to update (usually 1-2 minutes). Please keep this page open...');
+  const live = await waitForSiteUpdate(savedLists, (sec) => {
+    setBusyText(`Saved! Waiting for the website to update... ${sec}s (usually 1-2 minutes). Please keep this page open.`);
+  });
+
+  if (live) {
+    setBusyText('The website is updated. Loading...');
+    leaveEditMode();
+  } else {
+    setBusyText('Your lists are saved on GitHub, but the website has not shown them yet. This can take a few more minutes.');
+    addBusyButton('Open the site anyway', leaveEditMode);
+    addBusyButton('Keep waiting', async () => {
+      actions.innerHTML = '';
+      setBusyText('Waiting a bit more...');
+      const again = await waitForSiteUpdate(savedLists, () => {});
+      if (again) { leaveEditMode(); return; }
+      setBusyText('Still not updated. Your changes are safe on GitHub; just reload the site in a few minutes.');
+      addBusyButton('Open the site anyway', leaveEditMode);
+    });
+  }
+}
+
+function setupEnterEditButton() {
+  const anchor = document.getElementById('facet-mylists');
+  if (!anchor || document.getElementById('enter-edit-btn')) return;
+  const btn = document.createElement('button');
+  btn.id = 'enter-edit-btn';
+  btn.textContent = 'Edit my lists';
+  btn.style.cssText = 'margin-top:14px;padding:8px 12px;cursor:pointer;';
+  btn.addEventListener('click', () => {
+    window.location.href = window.location.pathname + '?edit=1';
+  });
+  anchor.insertAdjacentElement('afterend', btn);
+}
+
 function setupEditPanel() {
   const anchor = document.getElementById('facet-mylists');
   if (!anchor || document.getElementById('edit-panel')) return;
@@ -208,7 +348,7 @@ function setupEditPanel() {
   panel.id = 'edit-panel';
   panel.style.cssText = 'margin-top:16px;padding:10px;border:2px dashed #b71c1c;border-radius:8px;font-size:14px;';
   panel.innerHTML = '<strong>Edit mode</strong>' +
-    '<div style="margin:6px 0">Open a game card, tick its lists, then click Save to GitHub.</div>';
+    '<div style="margin:6px 0">Open a game card, tick its lists, then click "Save & exit edit mode".</div>';
 
   const mkBtn = (text) => {
     const b = document.createElement('button');
@@ -216,6 +356,9 @@ function setupEditPanel() {
     b.style.cssText = 'margin:2px 6px 2px 0;padding:6px 10px;cursor:pointer;';
     return b;
   };
+  const exitBtn = mkBtn('Save & exit edit mode');
+  exitBtn.style.fontWeight = 'bold';
+  const cancelBtn = mkBtn('Exit without saving');
   const saveBtn = mkBtn('Save to GitHub');
   const copyBtn = mkBtn('Copy JSON');
   const forgetBtn = mkBtn('Forget token');
@@ -229,6 +372,12 @@ function setupEditPanel() {
   box.readOnly = true;
   box.style.cssText = 'display:none;width:100%;height:160px;margin-top:8px;font-family:monospace;font-size:12px;';
 
+  exitBtn.addEventListener('click', () => saveAndExitEditMode());
+  cancelBtn.addEventListener('click', () => {
+    if (!editDirty || confirm('Leave edit mode and throw away your unsaved changes?')) {
+      leaveEditMode();
+    }
+  });
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
     await saveListsToGitHub(setStatus);
@@ -251,6 +400,8 @@ function setupEditPanel() {
     setStatus('Token removed from this browser.');
   });
 
+  panel.appendChild(exitBtn);
+  panel.appendChild(cancelBtn);
   panel.appendChild(saveBtn);
   panel.appendChild(copyBtn);
   panel.appendChild(forgetBtn);
@@ -589,7 +740,7 @@ function setupFilters() {
     if (el) el.addEventListener('change', () => onFilterChange());
   });
   setupClearAllButton();
-  if (EDIT_MODE) setupEditPanel();
+  if (EDIT_MODE) setupEditPanel(); else if (getStoredToken()) setupEnterEditButton();
 
   // Ensure player sub-options are hidden initially
   hideAllPlayerSubOptions();
