@@ -1,16 +1,13 @@
 {
-  "owned": [47, 118, 150376, 161926, 173346, 177736, 184522, 358669, 393325],
-  "played": [47, 177736, 208766],
-  "want_to_learn": [47, 177736, 203828],
+  "owned": [118, 150376, 161926, 173346, 184522, 358669, 393325],
+  "played": [208766],
+  "want_to_learn": [],
   "_names": {
-    "47": "Chinatown",
     "118": "Modern Art",
     "150376": "Dead of Winter: A Crossroads Game",
     "161926": "Dead Drop",
     "173346": "7 Wonders Duel",
-    "177736": "A Feast for Odin",
     "184522": "Dead Last",
-    "203828": "13 Minutes: The Cuban Missile Crisis, 1962",
     "208766": "13 Clues",
     "358669": "12 Chip Trick",
     "393325": "Captain Flip"
