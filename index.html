@@ -30,12 +30,26 @@
       <div id="facet-previous-players"></div>
       <div id="facet-numplays"></div>
       <div class="clear-all" id="clear-all"></div>
-      <div id="facet-wanttoplay">
-  <label>
-    <input type="checkbox" id="filter-wanttoplay" />
-    Want to Play
-  </label>
-</div>
+      <div id="facet-mylists">
+        <label class="filter-item">
+          <div class="filter-item-main">
+            <input type="checkbox" id="filter-owned">
+            <span class="filter-label">Owned (real life)</span>
+          </div>
+        </label>
+        <label class="filter-item">
+          <div class="filter-item-main">
+            <input type="checkbox" id="filter-bga-played">
+            <span class="filter-label">On BGA - I know it</span>
+          </div>
+        </label>
+        <label class="filter-item">
+          <div class="filter-item-main">
+            <input type="checkbox" id="filter-bga-learn">
+            <span class="filter-label">On BGA - want to learn</span>
+          </div>
+        </label>
+      </div>
     </aside>
     <main class="results">
       <div class="hits" id="hits">
