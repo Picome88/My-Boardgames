@@ -57,3 +57,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt
           python scripts/download_and_index.py --debug
+      - name: Publish database copy to the db-snapshot branch
+        if: steps.enabled.outputs.enabled == 'true'
+        run: |
+          # The website reads this copy directly (it is always fresh).
+          # It is one single commit that is replaced every time, so the repo does not grow.
+          mkdir /tmp/snapshot
+          cp gamecache.sqlite.gz /tmp/snapshot/
+          cd /tmp/snapshot
+          git init -q -b db-snapshot
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gamecache.sqlite.gz
+          git commit -q -m "Update database snapshot"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" db-snapshot
