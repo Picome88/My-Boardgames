@@ -608,11 +608,24 @@ function parsePlayerCount(countStr) {
   return { min: 0, max: 0, open: false };
 }
 
+// Older databases don't have the "lastmodified" column yet; the site must still work with them.
+let HAS_LASTMODIFIED = false;
+
+function dbHasColumn(columnName) {
+  try {
+    const result = db.exec('PRAGMA table_info(games)');
+    return !!result[0] && result[0].values.some(row => row[1] === columnName);
+  } catch (e) {
+    return false;
+  }
+}
+
 function loadAllGames() {
+  HAS_LASTMODIFIED = dbHasColumn('lastmodified');
   const stmt = db.prepare(`
     SELECT id, name, description, categories, mechanics, players, weight,
            playing_time, min_age, rank, usersrated, numowned, rating,
-           numplays, image, tags, previous_players, expansions, color
+           numplays, image, tags, previous_players, expansions, color${HAS_LASTMODIFIED ? ', lastmodified' : ''}
     FROM games
     ORDER BY name
   `);
@@ -716,6 +729,11 @@ function setupSorting() {
     { value: 'numowned', text: 'Most Owned' },
     { value: 'numrated', text: 'Most Rated' }
   ];
+
+  // Only offer this sort when the database knows when games were added/changed
+  if (HAS_LASTMODIFIED) {
+    options.splice(1, 0, { value: 'recent', text: 'Recently Added' });
+  }
 
   options.forEach(({ value, text }) => {
     const option = createElement('option', { value }, text);
@@ -1836,6 +1854,11 @@ function applyFiltersAndSort(filters) {
         return (b.numowned || 0) - (a.numowned || 0);
       case 'numrated':
         return (b.usersrated || 0) - (a.usersrated || 0);
+      case 'recent': {
+        // Newest first; "YYYY-MM-DD HH:MM:SS" text sorts correctly. Ties fall back to name.
+        const byDate = String(b.lastmodified || '').localeCompare(String(a.lastmodified || ''));
+        return byDate !== 0 ? byDate : a.name.localeCompare(b.name);
+      }
       default:
         return 0;
     }
