@@ -313,6 +313,10 @@ function setupFilters() {
   setupMinAgeFilter();
   setupPreviousPlayersFilter();
   setupNumPlaysFilter();
+    const wantToPlayCheckbox = document.getElementById('filter-wanttoplay');
+  if (wantToPlayCheckbox) {
+    wantToPlayCheckbox.addEventListener('change', onFilterChange);
+  }
   setupClearAllButton();
 
   // Ensure player sub-options are hidden initially
