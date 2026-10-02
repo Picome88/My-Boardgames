@@ -52,7 +52,8 @@ class SqliteIndexer:
                 tags TEXT,        -- JSON array
                 previous_players TEXT,  -- JSON array
                 expansions TEXT,  -- JSON array
-                color TEXT       -- Changed from colors to color (singular)
+                color TEXT,      -- Changed from colors to color (singular)
+                lastmodified TEXT  -- When the game was last changed in the BGG collection
             )
         ''')
 
@@ -141,8 +142,8 @@ class SqliteIndexer:
                 INSERT INTO games (
                     id, name, description, categories, mechanics, players,
                     weight, playing_time, min_age, rank, usersrated, numowned,
-                    rating, numplays, image, tags, previous_players, expansions, color
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rating, numplays, image, tags, previous_players, expansions, color, lastmodified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 game.get('id'), game.get('name'), game.get('description'), categories_json, mechanics_json,
                 players_json,
@@ -154,7 +155,7 @@ class SqliteIndexer:
                 int(game.get('numowned')) if game.get('numowned') is not None else None,
                 float(game.get('rating')) if game.get('rating') is not None else None,
                 game.get('numplays'), game.get('image'), tags_json, previous_players_json,
-                expansions_json, color_str
+                expansions_json, color_str, game.get('lastmodified') or ''
             ))
         conn.commit()
         conn.close()
