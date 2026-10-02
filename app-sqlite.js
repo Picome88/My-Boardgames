@@ -31,20 +31,48 @@ let currentPage = 1;
 // My personal lists (owned / BGA known / BGA want-to-learn), loaded from bga_status.json
 let myLists = { owned: [], played: [], want_to_learn: [] };
 
+// Edit mode: open the site with ?edit=1 to tick games into your lists right on the cards.
+const EDIT_MODE = new URLSearchParams(window.location.search).has('edit');
+const TOKEN_KEY = 'myBoardgamesGithubToken';
+const LIST_TO_FIELD = { owned: 'owned', played: 'bga_played', want_to_learn: 'bga_learn' };
+let GITHUB_REPO = '';
+let editDirty = false;
+
 function normalizeKey(x) {
   return String(x).trim().toLowerCase();
 }
 
-async function loadMyLists() {
+function parseListsData(data) {
+  return {
+    owned: (data.owned || []).map(normalizeKey),
+    played: (data.played || []).map(normalizeKey),
+    want_to_learn: (data.want_to_learn || []).map(normalizeKey)
+  };
+}
+
+async function loadMyLists(settings) {
+  GITHUB_REPO = (settings && settings.github && settings.github.repo) || '';
+
+  // In edit mode, read the newest file straight from GitHub (the website copy can be a few minutes old)
+  if (EDIT_MODE && GITHUB_REPO) {
+    try {
+      const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/bga_status.json`, {
+        headers: { 'Accept': 'application/vnd.github.raw+json' }
+      });
+      if (response.ok) {
+        myLists = parseListsData(JSON.parse(await response.text()));
+        console.log('Loaded bga_status.json from GitHub (edit mode)', myLists);
+        return;
+      }
+    } catch (e) {
+      console.warn('Could not read bga_status.json from GitHub API, using website copy', e);
+    }
+  }
+
   try {
     const response = await fetch('./bga_status.json?v=' + Date.now());
     if (!response.ok) throw new Error(response.status);
-    const data = await response.json();
-    myLists = {
-      owned: (data.owned || []).map(normalizeKey),
-      played: (data.played || []).map(normalizeKey),
-      want_to_learn: (data.want_to_learn || []).map(normalizeKey)
-    };
+    myLists = parseListsData(await response.json());
     console.log('Loaded bga_status.json', myLists);
   } catch (e) {
     console.warn('Could not load bga_status.json (filters will be empty):', e);
@@ -52,6 +80,216 @@ async function loadMyLists() {
 }
 
 // A game matches a list if its BGG id OR its name is in that list
+function setGameFlag(game, listName, checked) {
+  const idKey = normalizeKey(game.id);
+  const nameKey = normalizeKey(game.name);
+  const list = myLists[listName].filter(x => x !== idKey && x !== nameKey);
+  if (checked) list.push(idKey);
+  myLists[listName] = list;
+  game[LIST_TO_FIELD[listName]] = checked;
+  editDirty = true;
+  updateEditStatus();
+}
+
+function listToJsonValues(list) {
+  return list
+    .map(x => (/^\d+$/.test(x) ? Number(x) : x))
+    .sort((a, b) => (typeof a === 'number' && typeof b === 'number') ? a - b : String(a).localeCompare(String(b)));
+}
+
+function buildExportJson() {
+  const lists = {
+    owned: listToJsonValues(myLists.owned),
+    played: listToJsonValues(myLists.played),
+    want_to_learn: listToJsonValues(myLists.want_to_learn)
+  };
+  // "_names" is only a helper for you to read the file; the site ignores it.
+  const names = {};
+  [...lists.owned, ...lists.played, ...lists.want_to_learn].forEach(v => {
+    const g = allGames.find(game => String(game.id) === String(v));
+    if (g) names[g.id] = g.name;
+  });
+  const fmt = arr => '[' + arr.map(v => JSON.stringify(v)).join(', ') + ']';
+  const nameLines = Object.keys(names).map(id => `    ${JSON.stringify(id)}: ${JSON.stringify(names[id])}`);
+  return '{\n' +
+    `  "owned": ${fmt(lists.owned)},\n` +
+    `  "played": ${fmt(lists.played)},\n` +
+    `  "want_to_learn": ${fmt(lists.want_to_learn)},\n` +
+    '  "_names": {\n' + nameLines.join(',\n') + '\n  }\n' +
+    '}\n';
+}
+
+function updateEditStatus() {
+  const el = document.getElementById('edit-status');
+  if (el) el.textContent = 'You have unsaved changes. Click "Save to GitHub".';
+}
+
+function utf8ToBase64(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+async function saveListsToGitHub(setStatus) {
+  if (!GITHUB_REPO) {
+    setStatus('Could not find the repo name in config.ini (github_repo).');
+    return false;
+  }
+  let token = null;
+  try { token = localStorage.getItem(TOKEN_KEY); } catch (e) {}
+  if (!token) {
+    token = (prompt('Paste your GitHub token (Contents: Read and write, only for this repo):') || '').trim();
+    if (!token) {
+      setStatus('Save cancelled: no token.');
+      return false;
+    }
+  }
+
+  const api = `https://api.github.com/repos/${GITHUB_REPO}`;
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28'
+  };
+
+  try {
+    setStatus('Saving...');
+    const repoInfo = await fetch(api, { headers });
+    if (repoInfo.status === 401 || repoInfo.status === 403) {
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+      setStatus('GitHub rejected the token. Click "Save to GitHub" again and paste a valid token.');
+      return false;
+    }
+    const branch = (await repoInfo.json()).default_branch || 'master';
+
+    // Find the current file (we need its "sha" to overwrite it)
+    let sha;
+    const current = await fetch(`${api}/contents/bga_status.json?ref=${encodeURIComponent(branch)}`, { headers });
+    if (current.ok) sha = (await current.json()).sha;
+
+    const body = {
+      message: 'Update bga_status.json from the website',
+      content: utf8ToBase64(buildExportJson()),
+      branch
+    };
+    if (sha) body.sha = sha;
+
+    const put = await fetch(`${api}/contents/bga_status.json`, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    if (!put.ok) {
+      if (put.status === 401 || put.status === 403 || put.status === 404) {
+        try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+        setStatus('Saving was refused (token missing permission for this repo?). Click "Save to GitHub" to try with a new token.');
+      } else {
+        setStatus(`Saving failed (error ${put.status}).`);
+      }
+      return false;
+    }
+
+    // The token worked, so keep it for next time
+    try { localStorage.setItem(TOKEN_KEY, token); } catch (e) {}
+    editDirty = false;
+    setStatus('Saved to GitHub! The public site updates in a minute or two.');
+    return true;
+  } catch (e) {
+    console.error(e);
+    setStatus('Saving failed (network problem?). You can use "Copy JSON" instead.');
+    return false;
+  }
+}
+
+function setupEditPanel() {
+  const anchor = document.getElementById('facet-mylists');
+  if (!anchor || document.getElementById('edit-panel')) return;
+
+  const panel = document.createElement('div');
+  panel.id = 'edit-panel';
+  panel.style.cssText = 'margin-top:16px;padding:10px;border:2px dashed #b71c1c;border-radius:8px;font-size:14px;';
+  panel.innerHTML = '<strong>Edit mode</strong>' +
+    '<div style="margin:6px 0">Open a game card, tick its lists, then click Save to GitHub.</div>';
+
+  const mkBtn = (text) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.style.cssText = 'margin:2px 6px 2px 0;padding:6px 10px;cursor:pointer;';
+    return b;
+  };
+  const saveBtn = mkBtn('Save to GitHub');
+  const copyBtn = mkBtn('Copy JSON');
+  const forgetBtn = mkBtn('Forget token');
+
+  const status = document.createElement('div');
+  status.id = 'edit-status';
+  status.style.cssText = 'margin-top:8px;';
+  const setStatus = (t) => { status.textContent = t; };
+
+  const box = document.createElement('textarea');
+  box.readOnly = true;
+  box.style.cssText = 'display:none;width:100%;height:160px;margin-top:8px;font-family:monospace;font-size:12px;';
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    await saveListsToGitHub(setStatus);
+    saveBtn.disabled = false;
+  });
+  copyBtn.addEventListener('click', async () => {
+    const json = buildExportJson();
+    box.value = json;
+    box.style.display = 'block';
+    try {
+      await navigator.clipboard.writeText(json);
+      setStatus('Copied. You can paste it into bga_status.json on GitHub by hand.');
+    } catch (e) {
+      box.select();
+      setStatus('Could not copy automatically. Select the text below and copy it (Ctrl+C).');
+    }
+  });
+  forgetBtn.addEventListener('click', () => {
+    try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    setStatus('Token removed from this browser.');
+  });
+
+  panel.appendChild(saveBtn);
+  panel.appendChild(copyBtn);
+  panel.appendChild(forgetBtn);
+  panel.appendChild(status);
+  panel.appendChild(box);
+  anchor.insertAdjacentElement('afterend', panel);
+
+  window.addEventListener('beforeunload', (e) => {
+    if (editDirty) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+}
+
+function createCardEditPanel(game) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin-top:12px;padding:8px;border:1px dashed #b71c1c;border-radius:8px;display:flex;flex-direction:column;gap:6px;';
+  const title = document.createElement('strong');
+  title.textContent = 'My lists (edit mode)';
+  wrap.appendChild(title);
+  [
+    ['owned', 'Owned (real life)'],
+    ['played', 'On BGA - I know it'],
+    ['want_to_learn', 'On BGA - want to learn']
+  ].forEach(([listName, label]) => {
+    const l = document.createElement('label');
+    l.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!game[LIST_TO_FIELD[listName]];
+    cb.addEventListener('change', () => setGameFlag(game, listName, cb.checked));
+    l.appendChild(cb);
+    l.appendChild(document.createTextNode(label));
+    wrap.appendChild(l);
+  });
+  return wrap;
+}
+
 function gameInList(game, list) {
   return list.includes(normalizeKey(game.id)) || list.includes(normalizeKey(game.name));
 }
@@ -165,7 +403,7 @@ async function initializeDatabase(settings) {
     db = new SQL.Database(dbData);
     console.log('Database loaded successfully');
 
-    await loadMyLists();
+    await loadMyLists(settings);
     loadAllGames();
     initializeUI();
 
@@ -351,6 +589,7 @@ function setupFilters() {
     if (el) el.addEventListener('change', () => onFilterChange());
   });
   setupClearAllButton();
+  if (EDIT_MODE) setupEditPanel();
 
   // Ensure player sub-options are hidden initially
   hideAllPlayerSubOptions();
@@ -1029,6 +1268,7 @@ function updateURLWithFilters(filters) {
   if (filters.sortBy && filters.sortBy !== 'name') params.set('sort', filters.sortBy);
   if (filters.page && filters.page > 1) params.set('page', filters.page);
 
+  if (EDIT_MODE) params.set('edit', '1');
   const newUrl = `${window.location.pathname}?${params.toString()}`;
   history.replaceState(filters, '', newUrl);
 }
@@ -1465,7 +1705,7 @@ function getSelectedRange(name) {
 }
 
 function clearAllFilters() {
-  history.pushState({}, '', window.location.pathname);
+  history.pushState({}, '', EDIT_MODE ? window.location.pathname + '?edit=1' : window.location.pathname);
   const state = getFiltersFromURL();
   updateUIFromState(state);
   applyFiltersAndSort(state);
@@ -1604,6 +1844,10 @@ function renderGameCard(game) {
   const bggLink = clone.querySelector('.bgg-link');
   if (bggLink && game.id) {
     bggLink.href = `https://boardgamegeek.com/boardgame/${game.id}`;
+  }
+
+  if (EDIT_MODE) {
+    clone.querySelector('.game-details').appendChild(createCardEditPanel(game));
   }
 
   return clone;
