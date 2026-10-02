@@ -522,6 +522,41 @@ function loadINI(path, callback) {
     .catch(error => console.error('Error loading config:', error));
 }
 
+// Ask GitHub directly for the newest database file (the shared proxy can serve an old copy).
+// Returns the raw bytes, or null if anything goes wrong (then the proxy is used as before).
+async function fetchDatabaseFromGitHub(settings) {
+  try {
+    const repo = settings.github.repo;
+    const assetName = settings.github.snapshot_asset || 'gamecache.sqlite.gz';
+    const headers = { 'Accept': 'application/vnd.github+json' };
+    const token = getStoredToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const list = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=10`, { headers, cache: 'no-store' });
+    if (!list.ok) throw new Error(`releases list ${list.status}`);
+    const releases = await list.json();
+
+    let best = null;
+    releases.forEach(rel => (rel.assets || []).forEach(asset => {
+      if (asset.name === assetName && (!best || asset.updated_at > best.updated_at)) best = asset;
+    }));
+    if (!best) throw new Error('database asset not found in releases');
+
+    const download = await fetch(`https://api.github.com/repos/${repo}/releases/assets/${best.id}`, {
+      headers: { ...headers, 'Accept': 'application/octet-stream' },
+      cache: 'no-store'
+    });
+    if (!download.ok) throw new Error(`asset download ${download.status}`);
+
+    const bytes = new Uint8Array(await download.arrayBuffer());
+    console.log(`Database loaded directly from GitHub (updated ${best.updated_at})`);
+    return bytes;
+  } catch (e) {
+    console.warn('Could not load the database directly from GitHub, using the proxy instead:', e);
+    return null;
+  }
+}
+
 async function initializeDatabase(settings) {
   try {
     const SQL = await initSqlJs({
@@ -535,19 +570,21 @@ async function initializeDatabase(settings) {
 
     console.log(`Loading database from: ${dbUrl}`);
 
-    let response = await fetch(dbUrl);
-    if (!response.ok && isDev) {
+    let directBytes = isDev ? null : await fetchDatabaseFromGitHub(settings);
+
+    let response = directBytes ? null : await fetch(dbUrl, { cache: 'no-store' });
+    if (response && !response.ok && isDev) {
       // In development, fall back to the legacy local artifact name
       const legacyDbUrl = './mybgg.sqlite.gz';
       console.warn(`Primary database URL failed (${dbUrl}), trying legacy local file: ${legacyDbUrl}`);
       response = await fetch(legacyDbUrl);
     }
-    if (!response.ok) {
+    if (response && !response.ok) {
       throw new Error(`Failed to fetch database: ${response.status} ${response.statusText}`);
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
+    const bytes = directBytes || new Uint8Array(await response.arrayBuffer());
+    if (!directBytes) console.log('Database loaded through the proxy');
 
     const dbData = fflate.gunzipSync(bytes);
 
