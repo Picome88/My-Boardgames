@@ -2,6 +2,7 @@
 Configuration parsing utilities for GameCache project.
 """
 
+import ast
 import os
 from pathlib import Path
 
@@ -44,29 +45,29 @@ def parse_config_file(config_path="config.txt"):
 def create_nested_config(config):
     """Convert flat config to nested structure for backward compatibility"""
     nested = {
-    "project": {
-        "title": config["title"]
-    },
-    "boardgamegeek": {
-        "user_name": config["bgg_username"]
-    },
-    "github": {
-        "repo": config["github_repo"]
+        "project": {
+            "title": config["title"]
+        },
+        "boardgamegeek": {
+            "user_name": config["bgg_username"]
+        },
+        "github": {
+            "repo": config["github_repo"]
+        }
     }
-}
 
-# Read extra BGG collection parameters from config.ini
-if "extra_params" in config:
-    try:
-        nested["boardgamegeek"]["extra_params"] = eval(config["extra_params"])
-    except Exception:
-        raise ValueError("Invalid extra_params format in config.ini")
-    
+    # Read extra BGG collection parameters from the config file
+    if "extra_params" in config:
+        try:
+            nested["boardgamegeek"]["extra_params"] = ast.literal_eval(config["extra_params"])
+        except Exception:
+            raise ValueError("Invalid extra_params format in config file")
+
     # Check for BGG token in environment variable first
     bgg_token = os.environ.get('GAMECACHE_BGG_TOKEN')
 
     # If not in environment, try to load from .env file
-    # Look for .env in: current dir, parent dir (scripts), or grandparent (repo root)
+    # Look for .env in: current dir, or repo root
     if not bgg_token:
         env_locations = [
             Path('.env'),
@@ -88,6 +89,5 @@ if "extra_params" in config:
         nested["boardgamegeek"]["token"] = bgg_token
     elif "bgg_token" in config:
         nested["boardgamegeek"]["token"] = config["bgg_token"]
-    
-    return nested
 
+    return nested
