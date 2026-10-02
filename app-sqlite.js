@@ -28,6 +28,34 @@ let allGames = [];
 let filteredGames = [];
 let currentPage = 1;
 
+// My personal lists (owned / BGA known / BGA want-to-learn), loaded from bga_status.json
+let myLists = { owned: [], played: [], want_to_learn: [] };
+
+function normalizeKey(x) {
+  return String(x).trim().toLowerCase();
+}
+
+async function loadMyLists() {
+  try {
+    const response = await fetch('./bga_status.json?v=' + Date.now());
+    if (!response.ok) throw new Error(response.status);
+    const data = await response.json();
+    myLists = {
+      owned: (data.owned || []).map(normalizeKey),
+      played: (data.played || []).map(normalizeKey),
+      want_to_learn: (data.want_to_learn || []).map(normalizeKey)
+    };
+    console.log('Loaded bga_status.json', myLists);
+  } catch (e) {
+    console.warn('Could not load bga_status.json (filters will be empty):', e);
+  }
+}
+
+// A game matches a list if its BGG id OR its name is in that list
+function gameInList(game, list) {
+  return list.includes(normalizeKey(game.id)) || list.includes(normalizeKey(game.name));
+}
+
 // Utility functions
 function showError(message) {
   const container = document.getElementById('hits');
@@ -137,6 +165,7 @@ async function initializeDatabase(settings) {
     db = new SQL.Database(dbData);
     console.log('Database loaded successfully');
 
+    await loadMyLists();
     loadAllGames();
     initializeUI();
 
@@ -215,6 +244,10 @@ function loadAllGames() {
     } catch (e) {
       console.warn('Error parsing JSON for game:', row.id, e);
     }
+
+    row.owned = gameInList(row, myLists.owned);
+    row.bga_played = gameInList(row, myLists.played);
+    row.bga_learn = gameInList(row, myLists.want_to_learn);
 
     allGames.push(row);
   }
@@ -313,10 +346,10 @@ function setupFilters() {
   setupMinAgeFilter();
   setupPreviousPlayersFilter();
   setupNumPlaysFilter();
-    const wantToPlayCheckbox = document.getElementById('filter-wanttoplay');
-  if (wantToPlayCheckbox) {
-    wantToPlayCheckbox.addEventListener('change', onFilterChange);
-  }
+  ['filter-owned', 'filter-bga-played', 'filter-bga-learn'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => onFilterChange());
+  });
   setupClearAllButton();
 
   // Ensure player sub-options are hidden initially
@@ -837,7 +870,8 @@ function updateClearButtonVisibility(filters) {
     (selectedPlayingTime && selectedPlayingTime.length > 0) ||
     (selectedPreviousPlayers && selectedPreviousPlayers.length > 0) ||
     selectedMinAge !== null ||
-    selectedNumPlays !== null;
+    selectedNumPlays !== null ||
+    filters.onlyOwned || filters.onlyBgaPlayed || filters.onlyBgaLearn;
 
   clearContainer.style.display = isAnyFilterActive ? 'flex' : 'none';
 }
@@ -939,6 +973,9 @@ function getFiltersFromURL() {
     selectedPreviousPlayers: params.get('previous_players')?.split(',').filter(Boolean) || [],
     selectedMinAge: minAgeParam ? { min: Number(minAgeParam.split('-')[0]), max: Number(minAgeParam.split('-')[1]) } : null,
     selectedNumPlays: numPlaysParam ? { min: Number(numPlaysParam.split('-')[0]), max: Number(numPlaysParam.split('-')[1]) } : null,
+    onlyOwned: params.get('owned') === '1',
+    onlyBgaPlayed: params.get('bga_played') === '1',
+    onlyBgaLearn: params.get('bga_learn') === '1',
     sortBy: params.get('sort') || 'name',
     page: Number(params.get('page')) || 1
   };
@@ -966,6 +1003,9 @@ function getFiltersFromUI() {
     selectedPreviousPlayers,
     selectedMinAge,
     selectedNumPlays,
+    onlyOwned: !!document.getElementById('filter-owned')?.checked,
+    onlyBgaPlayed: !!document.getElementById('filter-bga-played')?.checked,
+    onlyBgaLearn: !!document.getElementById('filter-bga-learn')?.checked,
     sortBy,
     page: currentPage
   };
@@ -983,6 +1023,9 @@ function updateURLWithFilters(filters) {
   if (filters.selectedPreviousPlayers?.length) params.set('previous_players', filters.selectedPreviousPlayers.join(','));
   if (filters.selectedMinAge) params.set('min_age', `${filters.selectedMinAge.min}-${filters.selectedMinAge.max}`);
   if (filters.selectedNumPlays) params.set('numplays', `${filters.selectedNumPlays.min}-${filters.selectedNumPlays.max}`);
+  if (filters.onlyOwned) params.set('owned', '1');
+  if (filters.onlyBgaPlayed) params.set('bga_played', '1');
+  if (filters.onlyBgaLearn) params.set('bga_learn', '1');
   if (filters.sortBy && filters.sortBy !== 'name') params.set('sort', filters.sortBy);
   if (filters.page && filters.page > 1) params.set('page', filters.page);
 
@@ -1012,6 +1055,14 @@ function updateUIFromState(state) {
       });
     }
   }
+
+  // Restore my three filters (the reset above unchecks every checkbox)
+  const ownedCb = document.getElementById('filter-owned');
+  const playedCb = document.getElementById('filter-bga-played');
+  const learnCb = document.getElementById('filter-bga-learn');
+  if (ownedCb) ownedCb.checked = !!state.onlyOwned;
+  if (playedCb) playedCb.checked = !!state.onlyBgaPlayed;
+  if (learnCb) learnCb.checked = !!state.onlyBgaLearn;
 
   const playerRadio = document.querySelector(`input[name="players"][value="${state.selectedPlayerFilter}"]`);
   if (playerRadio) playerRadio.checked = true;
@@ -1095,10 +1146,26 @@ function filterGames(gamesToFilter, filters) {
     selectedPlayingTime,
     selectedPreviousPlayers,
     selectedMinAge,
-    selectedNumPlays
+    selectedNumPlays,
+    onlyOwned,
+    onlyBgaPlayed,
+    onlyBgaLearn
   } = filters;
 
   return gamesToFilter.filter(game => {
+    // My filters: "owned" is its own condition (AND with everything else).
+    if (onlyOwned && !game.owned) {
+      return false;
+    }
+
+    // The two BGA filters: if either/both are on, the game must match at least one selected.
+    if (onlyBgaPlayed || onlyBgaLearn) {
+      const ok = (onlyBgaPlayed && game.bga_played) || (onlyBgaLearn && game.bga_learn);
+      if (!ok) {
+        return false;
+      }
+    }
+
     if (query && !game.name.toLowerCase().includes(query) &&
       !game.description.toLowerCase().includes(query)) {
       return false;
